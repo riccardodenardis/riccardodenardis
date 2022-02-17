@@ -3,20 +3,24 @@ import tensorflow.keras as keras
 from tensorflow.keras.optimizers import Adam
 from buffer import ReplayBuffer
 from networks import ActorNetwork, CriticNetwork
+import math
 
 
 class Agent:
-    def __init__(self, input_dims, alpha=0.001, beta=0.002, env=None,
+    def __init__(self, input_dims, n_games, alpha=0.001, beta=0.002, env=None,
                  gamma=0.99, n_actions=2, max_size=1000000, tau=0.005,
-                 fc1=400, fc2=300, batch_size=64, noise=0.1):
+                 fc1=400, fc2=300, batch_size=64, noise_init=0.5, noise_final = 0.01, thr = 0.02):
         self.gamma = gamma
         self.tau = tau
         self.memory = ReplayBuffer(max_size, input_dims, n_actions)
         self.batch_size = batch_size
         self.n_actions = n_actions
-        self.noise = noise
+        self.noise_init = noise_init
+        self.noise_final = noise_final
         self.max_action = env.action_space.high[0]
         self.min_action = env.action_space.low[0]
+        self.n_games = n_games
+        self.thr = thr
 
         self.actor = ActorNetwork(n_actions=n_actions, name='actor')
         self.critic = CriticNetwork(name='critic')
@@ -64,12 +68,12 @@ class Agent:
         self.critic.load_weights(self.critic.checkpoint_file)
         self.target_critic.load_weights(self.target_critic.checkpoint_file)
 
-    def choose_action(self, observation, evaluate=False):
+    def choose_action(self, observation, game, evaluate=False):
         state = tf.convert_to_tensor([observation], dtype=tf.float32)
         actions = self.actor(state)
         if not evaluate:
             actions += tf.random.normal(shape=[self.n_actions],
-                                        mean=0.0, stddev=self.noise)
+                                        mean=0.0, stddev=self.noise_calc(game))
         # note that if the env has an action > 1, we have to multiply by
         # max action at some point
         actions = tf.clip_by_value(actions, self.min_action, self.max_action)
@@ -112,3 +116,13 @@ class Agent:
             actor_network_gradient, self.actor.trainable_variables))
 
         self.update_network_parameters()
+        
+    def noise_calc(self, game):
+        threshold = self.n_games * self.thr
+        if game < threshold:
+            return self.noise_init
+        else:
+            tau = (self.n_games - threshold) / math.log(self.noise_init/self.noise_final)
+            noise = self.noise_init * math.exp(-((game - threshold) / tau))
+            return noise
+        
